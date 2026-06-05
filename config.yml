@@ -1,0 +1,29 @@
+#  HSIR fitting pipeline
+#    1) Enter epi param values
+#    2) Define model and fit type
+#    3) Run:  targets::tar_make()
+
+# Epi parameters (TO ADD: ability to pass in data frame rather than individual param values)
+beta:  1.2      # transmission rate
+gamma: 0.4      # recovery rate  (infectious period 1/gamma = 5 days)
+cv:    1.0      # susceptibility CV  (used only when model_type = HSIR)
+
+# Model and fitting types (TO ADD: VOI, NPI-, NPI+)
+model_type: HSIR     # HSIR  or  SIR
+fit_regime: full     # full | 0GI | 1GI | 2GI
+
+
+#  Fixed params
+P:       1000000     # population size
+i0:      0.000001    # initial infectious fraction (= 1/P)
+seed:    123
+
+max_days: 365
+end_threshold: 1
+
+# MCMC params
+chains:          4
+parallel_chains: 4
+iter_warmup:     1000
+iter_sampling:   1000
+refresh:         100
