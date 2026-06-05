@@ -3,10 +3,7 @@
 #    2) Define model and fit type
 #    3) Run:  targets::tar_make()
 
-# Epi parameters (TO ADD: ability to pass in data frame rather than individual param values)
-beta:  1.2      # transmission rate
-gamma: 0.4      # recovery rate  (infectious period 1/gamma = 5 days)
-cv:    1.0      # susceptibility CV  (used only when model_type = HSIR)
+scenarios_csv: Data/parameter_grid.csv
 
 # Model and fitting types (TO ADD: VOI, NPI-, NPI+)
 model_type: HSIR     # HSIR  or  SIR

@@ -25,6 +25,8 @@ data {
   array[n_days-1] real ts;
   int N;
   array[n_days - 1] int<lower=0> cases;
+  
+  int n_fit;
 }
 transformed data {
   array[0] real x_r;
@@ -49,13 +51,13 @@ transformed parameters{
   vector<lower=0>[n_days - 1] incidence;
   
   for (i in 1:(n_days-1)){
-    incidence[i] = y[i+1, 4] - y[i, 4]; 
+    incidence[i] = fmax(y[i+1, 4] - y[i, 4], 1e-12);
   }
 }
 
 model {
   // LLS
-  cases ~ poisson(incidence * N);
+  cases[1:n_fit] ~ poisson(incidence[1:n_fit] * N);
 
   // priors
   beta ~ uniform(0,2);

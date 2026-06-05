@@ -41,8 +41,8 @@ transformed parameters {
   
   vector<lower=0>[n_days - 1] incidence;
   
-  for (i in 1:(n_days - 1)) {
-    incidence[i] = y[i+1, 4] - y[i, 4];
+  for (i in 1:(n_days-1)){
+    incidence[i] = fmax(y[i+1, 4] - y[i, 4], 1e-12);
   }
 }
 

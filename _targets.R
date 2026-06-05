@@ -1,29 +1,33 @@
-# _targets.R
-
 library(targets)
+library(tarchetypes)      # tar_map()
 library(stantargets)
 
 tar_source()
 
-# Read + validate config ONCE at construction time. tar_stan_mcmc() needs the
-# .stan path here (it names targets from it), so the model switch is resolved
-# now. `cfg` is a tracked global: editing config.yml invalidates the affected
-# targets on the next tar_make().
 cfg       <- load_params("config.yml")
 stan_file <- select_stan_file(cfg)
+scenarios <- read_scenarios(cfg)          # one row per param combo
+print(scenarios)
+
+# testing
+scenarios <- scenarios[1,]
 
 tar_option_set(
   packages = c("cmdstanr", "posterior", "deSolve", "dplyr", "yaml"),
   format   = "rds"
 )
 
-list(
-  tar_target(sim_data, simulate_epidemic(cfg)),
+fits <- tar_map(
+  values = scenarios,
+  names  = id,
+  
+  tar_target(scen_params, scenario_params(cfg, beta, gamma, cv)),
+  tar_target(sim_data,    simulate_epidemic(scen_params)),
   
   tar_stan_mcmc(
     fit,
     stan_files      = stan_file,
-    data            = build_stan_data(sim_data, cfg),
+    data            = build_stan_data(sim_data, scen_params),
     seed            = cfg$seed,
     chains          = cfg$chains,
     parallel_chains = cfg$parallel_chains,
@@ -32,4 +36,9 @@ list(
     init            = make_inits(cfg$model_type, cfg$chains, cfg$seed),
     refresh         = cfg$refresh
   )
+)
+
+list(
+  tar_target(scenarios_manifest, scenarios),
+  fits
 )

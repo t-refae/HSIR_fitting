@@ -1,6 +1,71 @@
 # R/functions.R
 # helpers for H/SIR fitting targets pipeline
 
+`%||%` <- function(a, b) if (is.null(a)) b else a
+
+# name-safe token for numbers: 1.2 -> "1p2", 1 -> "1", 0.5 -> "0p5"
+.id_token <- function(x) gsub(".", "p", format(x, trim = TRUE, scientific = FALSE),
+                              fixed = TRUE)
+
+# sanitise id into valid target-name suffix ("1" -> "id1", "slow" -> "slow")
+.id_safe <- function(x) {
+  s <- gsub("[^A-Za-z0-9_]", "_", as.character(x))
+  ifelse(grepl("^[A-Za-z]", s), s, paste0("id", s))
+}
+
+# parse row spec ("1-2", "1,2,5", "1:3,7") into row indices, "" -> all rows
+.parse_rows <- function(spec, n) {
+  spec <- trimws(spec)
+  if (!nzchar(spec)) return(seq_len(n))
+  idx <- integer(0)
+  for (p in strsplit(spec, ",", fixed = TRUE)[[1]]) {
+    p <- trimws(p)
+    m <- regmatches(p, regexec("^([0-9]+)\\s*[-:]\\s*([0-9]+)$", p))[[1]]
+    if (length(m) == 3L) idx <- c(idx, seq.int(as.integer(m[[2]]), as.integer(m[[3]])))
+    else                 idx <- c(idx, as.integer(p))
+  }
+  idx <- unique(idx)
+  if (anyNA(idx) || any(idx < 1L | idx > n))
+    stop("HSIR_ROWS out of range 1..", n, ": '", spec, "'.")
+  idx
+}
+
+resolve_scenarios_path <- function(cfg) {
+  p <- Sys.getenv("HSIR_SCENARIOS")
+  if (!nzchar(p)) p <- cfg$scenarios_csv %||% "scenarios.csv"
+  if (!file.exists(p)) stop("Scenarios CSV not found: '", p, "'.")
+  p
+}
+
+# Each row = one combination. beta/gamma/cv required (missing -> cfg default);
+# optional `id` column for target names
+# HSIR_ROWS selects a subset of rows
+read_scenarios <- function(cfg) {
+  path <- resolve_scenarios_path(cfg)
+  df   <- utils::read.csv(path, stringsAsFactors = FALSE, strip.white = TRUE)
+  names(df) <- tolower(trimws(names(df)))
+  
+  col <- function(name, default)
+    if (is.null(df[[name]])) rep(as.numeric(default), nrow(df)) else as.numeric(df[[name]])
+  beta  <- col("beta",  cfg$beta)
+  gamma <- col("gamma", cfg$gamma)
+  cv    <- col("cv",    cfg$cv)
+  
+  id <- if (!is.null(df$id)) .id_safe(df$id)
+  else sprintf("b%s_g%s_cv%s", .id_token(beta), .id_token(gamma), .id_token(cv))
+  
+  out <- data.frame(id = id, beta = beta, gamma = gamma, cv = cv,
+                    stringsAsFactors = FALSE)
+  out <- out[.parse_rows(Sys.getenv("HSIR_ROWS"), nrow(out)), , drop = FALSE]
+  if (anyDuplicated(out$id)) stop("Duplicate scenario ids after selection.")
+  message(sprintf("Loaded %d scenario(s) from %s", nrow(out), path))
+  out
+}
+
+scenario_params <- function(cfg, beta, gamma, cv) {
+  modifyList(cfg, list(beta = beta, gamma = gamma, cv = cv))
+}
+
 parse_fit_regime <- function(regime) {
   r <- tolower(trimws(as.character(regime)))
   if (r == "full") return(list(type = "full", k = NA_integer_))

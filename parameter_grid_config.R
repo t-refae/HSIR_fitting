@@ -132,5 +132,5 @@ p <- ggplot(traj, aes(time, I, colour = cv)) +
 
 print(p)
 
-# ggsave("I_dynamics.png", p, width = 11, height = 8, dpi = 300)
+ggsave("I_dynamics.png", p, width = 11, height = 8, dpi = 300)
 
