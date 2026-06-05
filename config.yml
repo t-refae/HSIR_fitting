@@ -1,5 +1,5 @@
 #  HSIR fitting pipeline
-#    1) Enter epi param values
+#    1) Enter epi param value file location
 #    2) Define model and fit type
 #    3) Run:  targets::tar_make()
 
