@@ -1,0 +1,5 @@
+id,beta,gamma,cv,regime
+pts_2GI,1.2,0.4,1,2GI
+pts_1GI,1.2,0.4,1,1GI
+pts_0GI,1.2,0.4,1,0GI
+pts_full,1.2,0.4,1,full

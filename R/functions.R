@@ -1,6 +1,6 @@
 # R/functions.R
-# helpers for H/SIR fitting targets pipeline
 
+#### helpers ####
 `%||%` <- function(a, b) if (is.null(a)) b else a
 
 # name-safe token for numbers: 1.2 -> "1p2", 1 -> "1", 0.5 -> "0p5"
@@ -93,6 +93,7 @@ select_stan_file <- function(params) {
   )
 }
 
+#### H/SIR dynamics ####
 .epi_rhs <- function(t, state, parms) {
   S <- state[["S"]]; I <- state[["I"]]
   foi <- parms$beta * I * S^(1 + (parms$cv)^2)
@@ -151,7 +152,7 @@ simulate_epidemic <- function(params) {
   )
 }
 
-
+#### MCMC ####
 build_stan_data <- function(sim, params) {
   n_days <- sim$n_days
   M      <- n_days - 1L                    # number of incidence observations
@@ -207,4 +208,94 @@ make_inits <- function(model_type, chains, seed = 1L) {
       init$cv <- runif(1, 1e-3, 0.25)
     init
   })
+}
+
+# convergence summary
+
+summarise_convergence <- function(
+    params        = c("beta", "D", "cv", "R0", "gamma"),  # parameters of interest
+    max_treedepth = 10,                                   # the sampler's cap
+    thresholds    = list(rhat = 1.01, ess = 400, ebfmi = 0.3)
+) {
+  stored <- targets::tar_objects()
+  sum_nm  <- grep("^fit_summary_",     stored, value = TRUE)
+  diag_nm <- grep("^fit_diagnostics_", stored, value = TRUE)
+  if (!length(sum_nm)) stop("No fit_summary_* targets found - run tar_make() first.")
+  
+  id_of <- function(x) sub("^fit_[a-z]+_[^_]+_", "", x)   # handles summary / diagnostics / mcmc
+  safe_max <- function(x) { x <- x[is.finite(x)]; if (length(x)) max(x) else NA_real_ }
+  safe_min <- function(x) { x <- x[is.finite(x)]; if (length(x)) min(x) else NA_real_ }
+  ebfmi1   <- function(e) { v <- sum((e - mean(e))^2); if (v == 0) NA_real_ else sum(diff(e)^2) / v }
+  
+  conv <- do.call(rbind, lapply(sum_nm, function(nm) {
+    s  <- targets::tar_read_raw(nm)
+    sk <- s[s$variable %in% params, , drop = FALSE]
+    if (!nrow(sk)) sk <- s                       # fall back to all vars if names differ
+    data.frame(
+      id           = id_of(nm),
+      max_rhat     = safe_max(sk$rhat),
+      min_ess_bulk = safe_min(sk$ess_bulk),
+      min_ess_tail = safe_min(sk$ess_tail),
+      max_rhat_all = safe_max(s$rhat),           # worst R-hat anywhere (incl. incidence/pred_cases)
+      stringsAsFactors = FALSE
+    )
+  }))
+  
+  diag <- if (length(diag_nm)) do.call(rbind, lapply(diag_nm, function(nm) {
+    d  <- targets::tar_read_raw(nm)              # draws_df of sampler diagnostics
+    by_chain <- split(d$energy__, d$.chain)
+    data.frame(
+      id            = id_of(nm),
+      n_divergent   = sum(d$divergent__),
+      pct_divergent = round(100 * mean(d$divergent__), 3),
+      n_treedepth   = sum(d$treedepth__ >= max_treedepth),
+      min_ebfmi     = round(safe_min(vapply(by_chain, ebfmi1, numeric(1))), 3),
+      stringsAsFactors = FALSE
+    )
+  })) else NULL
+  
+  out <- if (is.null(diag)) conv else merge(conv, diag, by = "id", all = TRUE)
+  
+  if ("scenarios_manifest" %in% stored) {
+    man <- targets::tar_read(scenarios_manifest)
+    out <- merge(man, out, by = "id", all.x = TRUE)
+  }
+  
+  meta <- targets::tar_meta(fields = "seconds")
+  mcmc <- meta[grepl("^fit_mcmc_", meta$name), c("name", "seconds")]
+  if (nrow(mcmc)) {
+    mcmc$id <- id_of(mcmc$name)
+    out <- merge(
+      out,
+      data.frame(id = mcmc$id,
+                 fit_seconds = round(mcmc$seconds, 1),
+                 fit_minutes = round(mcmc$seconds / 60, 2)),
+      by = "id", all.x = TRUE
+    )
+  }
+  
+  out$ok <- with(out,
+                 !is.na(max_rhat) &
+                   round(max_rhat, digits=2)     <= thresholds$rhat &
+                   min_ess_bulk >= thresholds$ess  &
+                   min_ess_tail >= thresholds$ess  &
+                   (is.null(diag) | (pct_divergent <= 5 & min_ebfmi >= thresholds$ebfmi)))
+  out$ok[is.na(out$ok)] <- FALSE
+  out$status <- ifelse(is.na(out$max_rhat), "missing/errored",
+                       ifelse(out$ok, "ok", "check"))
+  
+  out <- out[stringr::str_order(out$id, numeric = TRUE), , drop = FALSE]
+  message(sprintf("%d/%d scenarios pass all checks (rhat<=%.3f, ess>=%d, divergent=0, ebfmi>=%.2f).",
+                  sum(out$ok), nrow(out),
+                  thresholds$rhat, thresholds$ess, thresholds$ebfmi))
+  tibble::as_tibble(out)
+}
+
+
+
+#### export ####
+write_fit_bundle <- function(draws, summary, diagnostics, path) {
+  dir.create(dirname(path), showWarnings = FALSE, recursive = TRUE)
+  saveRDS(list(draws = draws, summary = summary, diagnostics = diagnostics), path)
+  path
 }

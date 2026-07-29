@@ -3,11 +3,13 @@
 #    2) Define model and fit type
 #    3) Run:  targets::tar_make()
 
-scenarios_csv: Data/parameter_grid.csv
+# scenarios_csv: Data/parameter_grid.csv
+scenarios_csv: Data/test_parameter_grid.csv
 
-# Model and fitting types (TO ADD: VOI, NPI-, NPI+)
+
+# Model and fitting types
 model_type: HSIR     # HSIR  or  SIR
-fit_regime: full     # full | 0GI | 1GI | 2GI
+fit_regime: full     # full | PTS 
 
 
 #  Fixed params
@@ -20,7 +22,39 @@ end_threshold: 1
 
 # MCMC params
 chains:          4
-parallel_chains: 4
-iter_warmup:     1000
-iter_sampling:   1000
+parallel_chains: 1
+iter_warmup:     4000
+iter_sampling:   2000
 refresh:         100
+workers:         36
+
+# VOI fits (HSIR-generated data, fitted with both SIR and HSIR models with tighter beta priors)
+
+# VOI fits — file locations + scenario grid
+voi_scenarios_csv: Data/voi_scenarios.csv
+voi_stan_sir:      Stan/VOI_SIR.stan
+voi_stan_hsir:     Stan/VOI_HSIR.stan
+
+# VOI fits - pop params
+voi_P:               10000
+voi_i0:              0.0001
+
+# VOI fits - MCMC params
+voi_chains:          4
+voi_parallel_chains: 1
+voi_iter_warmup:     2000
+voi_iter_sampling:   2000
+voi_refresh:         100
+voi_seed:            123
+
+# PTS fits
+pts_chains:          4
+pts_parallel_chains: 1
+pts_iter_warmup:     4000
+pts_iter_sampling:   4000
+pts_refresh:         100
+pts_seed:            123
+
+pts_adapt_delta:   0.99
+pts_max_treedepth: 12
+pts_metric:        dense_e
