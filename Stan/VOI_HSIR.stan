@@ -1,23 +1,15 @@
 functions {
   vector sir(real t, vector y, vector theta) {
-
-      real S = y[1];
-      real I = y[2];
-      real R = y[3];
-      real C = y[4];
-      
-      real beta = theta[1];
-      real gamma = 1/theta[2];
-      real cv = theta[3];
-      
-      real dS_dt = -beta * I * S^(1+cv^2);
-      real dI_dt =  beta * I * S^(1+cv^2) - gamma * I;
-      real dR_dt =  gamma * I;
-      real dC_dt =  beta * I * S^(1+cv^2);
-      
-      return to_vector([dS_dt, dI_dt, dR_dt, dC_dt]);
+    real S = y[1];
+    real I = y[2];
+    real beta = theta[1];
+    real gamma = 1 / theta[2];
+    real cv = theta[3];
+    real foi = beta * I * pow(fmax(S, 1e-12), 1 + cv^2);
+    return to_vector([-foi, foi - gamma * I, gamma * I, foi]);
   }
 }
+
 data {
   int<lower=2> n_days;
   vector[4] y0;             // Initial state vector [S, I, R, C] at day 1
@@ -43,7 +35,9 @@ transformed parameters{
   theta[1] = beta;
   theta[2] = D;
   theta[3] = cv;
-  y = ode_bdf(sir, y0, t0, ts, theta);
+  
+  y = ode_rk45_tol(sir, y0, t0, ts, 1e-8, 1e-10, 100000, theta);  
+  
   vector<lower=0>[n_days - 1] incidence;
   
   incidence[1] = fmax(y[1, 4] - y0[4], 1e-12);

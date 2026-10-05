@@ -1,22 +1,4 @@
-# ============================================================================
-# PTS fits — partial time series, fitted with the ORIGINAL HSIR Stan file
-# ----------------------------------------------------------------------------
-# Same (beta, gamma, cv) combinations as the full-time-series (FTS) fits,
-# excluding cv = 0, each fitted at three observation horizons relative to the
-# incidence peak (in generation intervals, GI = 1/gamma):
-#
-#       -2GI     two generation intervals before the peak
-#       -1GI     one generation interval before the peak
-#       at peak  up to the peak
-#
-# PTS reuses the FTS machinery (scenario_params, simulate_epidemic,
-# build_stan_data, select_stan_file, make_inits). The HSIR Stan model fits a
-# partial window via its `n_fit` field (the likelihood uses cases[1:n_fit]),
-# so PTS leaves the full Stan-data list untouched and simply sets n_fit to the
-# horizon length. The full epidemic is still simulated and integrated; only the
-# likelihood window changes. PTS has its own MCMC settings (cfg$pts_*), falling
-# back to the main values when unset.
-# ============================================================================
+# R/PTS.R
 
 .pts_or <- function(x, default) if (is.null(x)) default else x
 
@@ -108,8 +90,15 @@ pts_summarise_convergence <- function(cfg = load_params("config.yml"),
     s  <- posterior::summarise_draws(dr, posterior::default_convergence_measures())
     d  <- b$diagnostics
     
-    eb <- .pts_min(.pts_num(d, "ebfmi"))
-    if (is.na(eb)) eb <- .pts_ebfmi(dr)
+    d  <- b$diagnostics
+    dv <- if (!is.null(d) && !is.null(d$divergent__)) as.numeric(d$divergent__) else NA_real_
+    td <- if (!is.null(d) && !is.null(d$treedepth__)) as.numeric(d$treedepth__) else NA_real_
+    eb <- if (!is.null(d) && !is.null(d$energy__) && !is.null(d$.chain)) {
+      .pts_min(as.numeric(tapply(as.numeric(d$energy__), d$.chain, function(E) {
+        if (length(E) < 2L || stats::var(E) == 0) NA_real_
+        else sum(diff(E)^2) / length(E) / stats::var(E)
+      })))
+    } else NA_real_
     
     rows[[length(rows) + 1L]] <- data.frame(
       target             = sprintf("pts_fit_mcmc_%s_%s", model, sid),
@@ -121,8 +110,8 @@ pts_summarise_convergence <- function(cfg = load_params("config.yml"),
       max_rhat           = max(s$rhat,     na.rm = TRUE),
       min_ess_bulk       = min(s$ess_bulk, na.rm = TRUE),
       min_ess_tail       = min(s$ess_tail, na.rm = TRUE),
-      divergences        = .pts_sum(.pts_num(d, "num_divergent")),
-      max_treedepth_hits = .pts_sum(.pts_num(d, "num_max_treedepth")),
+      divergences        = .pts_sum(dv),
+      max_treedepth_hits = .pts_sum(td >= 10),
       min_ebfmi          = eb,
       respliced          = !is.null(b$rerun),
       stringsAsFactors   = FALSE

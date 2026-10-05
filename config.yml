@@ -42,7 +42,7 @@ voi_i0:              0.0001
 # VOI fits - MCMC params
 voi_chains:          4
 voi_parallel_chains: 1
-voi_iter_warmup:     2000
+voi_iter_warmup:     4000
 voi_iter_sampling:   2000
 voi_refresh:         100
 voi_seed:            123
@@ -50,11 +50,31 @@ voi_seed:            123
 # PTS fits
 pts_chains:          4
 pts_parallel_chains: 1
-pts_iter_warmup:     4000
-pts_iter_sampling:   4000
+pts_iter_warmup:     5000
+pts_iter_sampling:   5000
 pts_refresh:         100
 pts_seed:            123
 
 pts_adapt_delta:   0.99
 pts_max_treedepth: 12
 pts_metric:        dense_e
+
+# NPI-informing fits
+npi_scenarios_csv: Data/npi_scenarios.csv
+npi_stan:          Stan/NPI_HSIR.stan
+
+npi_P:             10000
+npi_i0:            0.0001
+npi_n_days:        60
+npi_gi_before_peak: 1
+
+npi_chains:          4
+npi_parallel_chains: 1
+npi_iter_warmup:     5000
+npi_iter_sampling:   5000
+npi_refresh:         100
+npi_seed:            2
+
+npi_adapt_delta:   0.9
+npi_max_treedepth: 12
+npi_metric:        diag_e

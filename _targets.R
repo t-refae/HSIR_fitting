@@ -2,6 +2,7 @@ library(targets)
 library(tarchetypes)      # tar_map()
 library(stantargets)
 library(dplyr)
+library(gtools)
 
 tar_source()
 
@@ -202,6 +203,54 @@ pts_export <- lapply(pts_scenarios$id, function(sid) {
 })
 
 
+#### NPI ####
+npi_scenarios <- npi_read_scenarios(cfg)
+npi_mcmc      <- npi_mcmc_settings(cfg)
+npi_stan      <- npi_stan_file(cfg)
+npi_model     <- tools::file_path_sans_ext(basename(npi_stan))
+
+npi_fits <- tar_map(
+  values = npi_scenarios,
+  names  = id,
+  
+  tar_target(npi_row, data.frame(id = id, theta = theta, beta = beta,
+                                 gamma = gamma, cv = cv, eff = eff,
+                                 n_intervals = n_intervals,
+                                 npi_start = npi_start,
+                                 stringsAsFactors = FALSE)),
+  
+  tar_stan_mcmc(
+    npi_fit,
+    stan_files      = npi_stan,
+    data            = npi_build_stan_data(cfg, npi_row),
+    seed            = npi_mcmc$seed,
+    chains          = npi_mcmc$chains,
+    parallel_chains = npi_mcmc$parallel_chains,
+    iter_warmup     = npi_mcmc$iter_warmup,
+    iter_sampling   = npi_mcmc$iter_sampling,
+    adapt_delta     = npi_mcmc$adapt_delta,
+    max_treedepth   = npi_mcmc$max_treedepth,
+    metric          = npi_mcmc$metric,
+    refresh         = npi_mcmc$refresh
+  )
+)
+
+npi_export_targets <- lapply(npi_scenarios$id, function(sid) {
+  draws_sym <- as.symbol(sprintf("npi_fit_draws_%s_%s",       npi_model, sid))
+  summ_sym  <- as.symbol(sprintf("npi_fit_summary_%s_%s",     npi_model, sid))
+  diag_sym  <- as.symbol(sprintf("npi_fit_diagnostics_%s_%s", npi_model, sid))
+  out_path  <- file.path("outputs/NPI", sprintf("npi_fit_%s_%s.rds", npi_model, sid))
+  tar_target_raw(
+    sprintf("npi_export_%s", sid),
+    substitute(
+      write_fit_bundle(D, S, G, P),
+      list(D = draws_sym, S = summ_sym, G = diag_sym, P = out_path)
+    ),
+    format = "file"
+  )
+})
+
+#### targets ####
 list(
   #### FTS ####
   tar_target(scenarios_manifest, scenarios),
@@ -261,6 +310,27 @@ list(
   tarchetypes::tar_combine(
     pts_conv_diag,
     tarchetypes::tar_select_targets(pts_fits, starts_with("pts_fit_diagnostics")),
+    command = dplyr::bind_rows(!!!.x, .id = "target")
+  ),
+  
+
+  #### NPI ####
+  
+  tar_target(npi_scenarios_manifest, npi_scenarios),
+  
+  npi_fits,
+  
+  npi_export_targets,
+  
+  tarchetypes::tar_combine(
+    npi_conv_summary,
+    tarchetypes::tar_select_targets(npi_fits, starts_with("npi_fit_summary")),
+    command = dplyr::bind_rows(!!!.x, .id = "target")
+  ),
+  
+  tarchetypes::tar_combine(
+    npi_conv_diag,
+    tarchetypes::tar_select_targets(npi_fits, starts_with("npi_fit_diagnostics")),
     command = dplyr::bind_rows(!!!.x, .id = "target")
   )
 )

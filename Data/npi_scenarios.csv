@@ -1,0 +1,9 @@
+﻿id,theta,beta,gamma,cv,eff,n_intervals
+npi_eff04_GI0,1,1.2,0.4,1,0.4,0
+npi_eff04_GI1,2,1.2,0.4,1,0.4,1
+npi_eff04_GI2,3,1.2,0.4,1,0.4,2
+npi_eff04_GI3,4,1.2,0.4,1,0.4,3
+npi_eff08_GI0,5,1.2,0.4,1,0.8,0
+npi_eff08_GI1,6,1.2,0.4,1,0.8,1
+npi_eff08_GI2,7,1.2,0.4,1,0.8,2
+npi_eff08_GI3,8,1.2,0.4,1,0.8,3

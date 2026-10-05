@@ -38,8 +38,7 @@ transformed parameters {
   theta[1] = beta;
   theta[2] = D;
 
-  // Solve the ODE using ode_bdf with the sir function
-  y = ode_bdf(sir, y0, t0, ts, theta);
+  y = ode_rk45_tol(sir, y0, t0, ts, 1e-8, 1e-10, 100000, theta);
   
   // Calculate incidence (new cases per day); y0 anchors the day-1 cumulative
   vector<lower=0>[n_days - 1] incidence;

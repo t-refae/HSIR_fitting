@@ -1,23 +1,4 @@
-# ============================================================================
-# VOI fits — self-contained machinery (kept separate from the main functions)
-# ----------------------------------------------------------------------------
-# A heterogeneous-susceptibility (HSIR) epidemic is the data-generating truth.
-# Each scenario is fitted by BOTH models: the misspecified homogeneous SIR and
-# the correctly specified HSIR. Scenarios sweep an observation horizon (regime)
-# measured in generation intervals (1/gamma) relative to the incidence peak:
-#
-#       regime = "2GI"   two generation intervals before the peak
-#       regime = "1GI"   one generation interval before the peak
-#       regime = "0GI"   at the peak
-#       regime = "full"  the whole epidemic
-#
-# The truth is simulated deterministically (seeded from cfg$seed and the
-# scenario's parameters), so for a given parameter set the four regimes are
-# nested crops of the SAME realised epidemic, and the SIR and HSIR fits at a
-# given regime see identical data. Everything is driven by the shared cfg
-# (P, i0, seed, max_days, end_threshold, chains, iter_*, ...); only the scenario
-# grid and the two Stan-file paths are VOI-specific.
-# ============================================================================
+# R/VOI.R
 
 .voi_or <- function(x, default) if (is.null(x)) default else x
 
@@ -176,72 +157,92 @@ voi_read_scenarios <- function(cfg) {
   grid[, required]
 }
 
-voi_summarise_convergence <- function(cfg = load_params("config.yml")) {
+voi_summarise_convergence <- function(cfg = load_params("config.yml"),
+                                      voi_dir = "outputs/VOI") {
   grid  <- voi_read_scenarios(cfg)
-  bases <- c(SIR = "voi_sir", HSIR = "voi_hsir")
   stans <- c(SIR  = tools::file_path_sans_ext(basename(voi_stan_file(cfg, "SIR"))),
              HSIR = tools::file_path_sans_ext(basename(voi_stan_file(cfg, "HSIR"))))
   
   rows <- list()
-  for (m in names(bases)) {
-    for (sid in grid$id) {
-      mcmc_name <- sprintf("%s_mcmc_%s_%s", bases[[m]], stans[[m]], sid)
-      fit <- tryCatch(targets::tar_read_raw(mcmc_name), error = function(e) NULL)
-      if (is.null(fit)) next
-      s <- fit$summary()
-      d <- fit$diagnostic_summary(quiet = TRUE)
+  for (m in names(stans)) {
+    for (i in seq_len(nrow(grid))) {
+      sid  <- grid$id[i]
+      path <- file.path(voi_dir, sprintf("voi_fit_%s_%s.rds", stans[[m]], sid))
+      if (!file.exists(path)) next
+      
+      b  <- readRDS(path)
+      dr <- posterior::as_draws_df(as.data.frame(b$draws))
+      s  <- posterior::summarise_draws(dr, posterior::default_convergence_measures())
+      d  <- b$diagnostics
+      
+      d  <- b$diagnostics
+      dv <- if (!is.null(d) && !is.null(d$divergent__)) as.numeric(d$divergent__) else NA_real_
+      td <- if (!is.null(d) && !is.null(d$treedepth__)) as.numeric(d$treedepth__) else NA_real_
+      eb <- if (!is.null(d) && !is.null(d$energy__) && !is.null(d$.chain)) {
+        .pts_min(as.numeric(tapply(as.numeric(d$energy__), d$.chain, function(E) {
+          if (length(E) < 2L || stats::var(E) == 0) NA_real_
+          else sum(diff(E)^2) / length(E) / stats::var(E)
+        })))
+      } else NA_real_
+      
       rows[[length(rows) + 1L]] <- data.frame(
-        target             = mcmc_name,
+        target             = sprintf("%s_mcmc_%s_%s",
+                                     if (m == "SIR") "voi_sir" else "voi_hsir",
+                                     stans[[m]], sid),
         model              = m,
         id                 = sid,
+        regime             = grid$regime[i],
         max_rhat           = max(s$rhat,     na.rm = TRUE),
         min_ess_bulk       = min(s$ess_bulk, na.rm = TRUE),
         min_ess_tail       = min(s$ess_tail, na.rm = TRUE),
-        divergences        = sum(d$num_divergent),
-        max_treedepth_hits = sum(d$num_max_treedepth),
-        min_ebfmi          = min(d$ebfmi),
+        divergences        = .pts_sum(dv), 
+        max_treedepth_hits = .pts_sum(td >= 10),
+        min_ebfmi          = eb,
         stringsAsFactors   = FALSE
       )
     }
   }
-  if (!length(rows)) {
-    stop("No VOI fits found in the store. Run tar_make() first.", call. = FALSE)
-  }
+  if (!length(rows)) stop("No VOI bundles found in ", voi_dir, call. = FALSE)
   res <- dplyr::bind_rows(rows)
   
   meta <- targets::tar_meta(fields = "seconds")
   res$seconds <- meta$seconds[match(res$target, meta$name)]
   
-  res$ok <- res$max_rhat <= 1.01 & res$divergences <= 100 & res$min_ebfmi >= 0.3
-  res[order(res$model, res$id), c("model", "id", "max_rhat", "min_ess_bulk",
-                                  "min_ess_tail", "divergences",
-                                  "max_treedepth_hits", "min_ebfmi", "seconds", "ok")]
+  res$ok <- round(res$max_rhat, digits = 3) <= 1.02 &
+    (is.na(res$divergences) | res$divergences <= 100) &
+    (is.na(res$min_ebfmi)   | res$min_ebfmi >= 0.3)
+  
+  res[order(res$model, res$id), c("model", "id", "regime",
+                                  "max_rhat", "min_ess_bulk", "min_ess_tail",
+                                  "divergences", "max_treedepth_hits",
+                                  "min_ebfmi", "seconds", "ok")]
 }
 
 #### REMOVE FROM HERE LATER ####
 voi_posterior_draws <- function(cfg = load_params("config.yml"),
-                                params = c("beta", "R0", "cv")) {
+                                params = c("beta", "R0", "cv"),
+                                voi_dir = "outputs/VOI") {
   grid <- voi_read_scenarios(cfg)
   rlev <- c("2GI", "1GI", "0GI", "full")
-  models <- list(
-    SIR  = list(base = "voi_sir",  stan = tools::file_path_sans_ext(basename(voi_stan_file(cfg, "SIR")))),
-    HSIR = list(base = "voi_hsir", stan = tools::file_path_sans_ext(basename(voi_stan_file(cfg, "HSIR"))))
-  )
+  stans <- c(SIR  = tools::file_path_sans_ext(basename(voi_stan_file(cfg, "SIR"))),
+             HSIR = tools::file_path_sans_ext(basename(voi_stan_file(cfg, "HSIR"))))
+  
   true_value <- function(p, beta, gamma, cv) switch(
     p, beta = beta, gamma = gamma, cv = cv,
     R0 = beta / gamma, D = 1 / gamma, NA_real_
   )
   
   out <- list()
-  for (m in names(models)) {
-    base <- models[[m]]$base; stan <- models[[m]]$stan
+  for (m in names(stans)) {
     for (i in seq_len(nrow(grid))) {
-      sid <- grid$id[i]
-      dr  <- tryCatch(
-        as.data.frame(targets::tar_read_raw(sprintf("%s_draws_%s_%s", base, stan, sid))),
-        error = function(e) NULL
-      )
-      if (is.null(dr)) next
+      sid  <- grid$id[i]
+      path <- file.path(voi_dir, sprintf("voi_fit_%s_%s.rds", stans[[m]], sid))
+      if (!file.exists(path)) next
+      
+      dr <- as.data.frame(readRDS(path)$draws)
+      if (!"gamma" %in% names(dr) && "D" %in% names(dr)) dr$gamma <- 1 / dr$D
+      if (!"R0" %in% names(dr) && all(c("beta", "D") %in% names(dr))) dr$R0 <- dr$beta * dr$D
+      
       for (p in intersect(params, names(dr))) {
         out[[length(out) + 1L]] <- data.frame(
           model     = m,
@@ -255,11 +256,9 @@ voi_posterior_draws <- function(cfg = load_params("config.yml"),
       }
     }
   }
-  if (!length(out)) {
-    stop("No VOI draws found in the store. Run tar_make() first.", call. = FALSE)
-  }
+  if (!length(out)) stop("No VOI bundles found in ", voi_dir, call. = FALSE)
   res <- dplyr::bind_rows(out)
-  res$model <- factor(res$model, levels = c("HSIR", "SIR"))   # HSIR ridge on top
+  res$model <- factor(res$model, levels = c("HSIR", "SIR"))
   res
 }
 

@@ -37,8 +37,7 @@ transformed parameters {
   theta[1] = beta;
   theta[2] = D;
 
-  y = ode_bdf(sir, y0, t0, ts, theta);
-  
+  y = ode_rk45_tol(sir, y0, t0, ts, 1e-8, 1e-10, 100000, theta);  
   vector<lower=0>[n_days - 1] incidence;
   
   for (i in 1:(n_days-1)){
