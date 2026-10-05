@@ -199,13 +199,14 @@ build_stan_data <- function(sim, params) {
 
 make_inits <- function(model_type, chains, seed = 1L) {
   set.seed(seed)
+  cv_grid <- seq(0.2, 2.4, length.out = chains)
   lapply(seq_len(chains), function(ch) {
     init <- list(
       beta = runif(1, 0.6, 1.4),
       D    = runif(1, 3.5, 4.5)
     )
     if (toupper(trimws(model_type)) == "HSIR")
-      init$cv <- runif(1, 1e-3, 0.25)
+      init$cv <- cv_grid[ch]
     init
   })
 }
@@ -213,85 +214,76 @@ make_inits <- function(model_type, chains, seed = 1L) {
 # convergence summary
 
 summarise_convergence <- function(
-    params        = c("beta", "D", "cv", "R0", "gamma"),  # parameters of interest
-    max_treedepth = 10,                                   # the sampler's cap
-    thresholds    = list(rhat = 1.01, ess = 400, ebfmi = 0.3)
+    cfg           = load_params("config.yml"),
+    params        = c("beta", "D", "cv", "R0", "gamma"),
+    max_treedepth = 10,
+    thresholds    = list(rhat = 1.01, ess = 400, ebfmi = 0.3),
+    fts_dir       = "outputs/FTS"
 ) {
-  stored <- targets::tar_objects()
-  sum_nm  <- grep("^fit_summary_",     stored, value = TRUE)
-  diag_nm <- grep("^fit_diagnostics_", stored, value = TRUE)
-  if (!length(sum_nm)) stop("No fit_summary_* targets found - run tar_make() first.")
+  grid  <- read_scenarios(cfg)
+  model <- tools::file_path_sans_ext(basename(select_stan_file(cfg)))
   
-  id_of <- function(x) sub("^fit_[a-z]+_[^_]+_", "", x)   # handles summary / diagnostics / mcmc
   safe_max <- function(x) { x <- x[is.finite(x)]; if (length(x)) max(x) else NA_real_ }
   safe_min <- function(x) { x <- x[is.finite(x)]; if (length(x)) min(x) else NA_real_ }
   ebfmi1   <- function(e) { v <- sum((e - mean(e))^2); if (v == 0) NA_real_ else sum(diff(e)^2) / v }
   
-  conv <- do.call(rbind, lapply(sum_nm, function(nm) {
-    s  <- targets::tar_read_raw(nm)
-    sk <- s[s$variable %in% params, , drop = FALSE]
-    if (!nrow(sk)) sk <- s                       # fall back to all vars if names differ
-    data.frame(
-      id           = id_of(nm),
-      max_rhat     = safe_max(sk$rhat),
-      min_ess_bulk = safe_min(sk$ess_bulk),
-      min_ess_tail = safe_min(sk$ess_tail),
-      max_rhat_all = safe_max(s$rhat),           # worst R-hat anywhere (incl. incidence/pred_cases)
+  rows <- list()
+  for (i in seq_len(nrow(grid))) {
+    sid  <- grid$id[i]
+    path <- file.path(fts_dir, sprintf("fit_%s_%s.rds", model, sid))
+    if (!file.exists(path)) next
+    
+    b  <- readRDS(path)
+    dr <- posterior::as_draws_df(as.data.frame(b$draws))
+    
+    keep <- intersect(params, posterior::variables(dr))
+    sk <- posterior::summarise_draws(
+      if (length(keep)) posterior::subset_draws(dr, variable = keep) else dr,
+      posterior::default_convergence_measures()
+    )
+    
+    d <- b$diagnostics
+    dv <- if (!is.null(d) && !is.null(d$divergent__)) as.numeric(d$divergent__) else NA_real_
+    td <- if (!is.null(d) && !is.null(d$treedepth__)) as.numeric(d$treedepth__) else NA_real_
+    eb <- if (!is.null(d) && !is.null(d$energy__) && !is.null(d$.chain)) {
+      safe_min(vapply(split(as.numeric(d$energy__), d$.chain), ebfmi1, numeric(1)))
+    } else NA_real_
+    
+    rows[[length(rows) + 1L]] <- data.frame(
+      target        = sprintf("fit_mcmc_%s_%s", model, sid),
+      id            = sid,
+      max_rhat      = safe_max(sk$rhat),
+      min_ess_bulk  = safe_min(sk$ess_bulk),
+      min_ess_tail  = safe_min(sk$ess_tail),
+      max_rhat_all  = safe_max(b$summary$rhat),
+      n_divergent   = if (all(is.na(dv))) NA_real_ else sum(dv),
+      pct_divergent = if (all(is.na(dv))) NA_real_ else round(100 * mean(dv), 3),
+      n_treedepth   = if (all(is.na(td))) NA_real_ else sum(td >= max_treedepth),
+      min_ebfmi     = round(eb, 3),
       stringsAsFactors = FALSE
     )
-  }))
-  
-  diag <- if (length(diag_nm)) do.call(rbind, lapply(diag_nm, function(nm) {
-    d  <- targets::tar_read_raw(nm)              # draws_df of sampler diagnostics
-    by_chain <- split(d$energy__, d$.chain)
-    data.frame(
-      id            = id_of(nm),
-      n_divergent   = sum(d$divergent__),
-      pct_divergent = round(100 * mean(d$divergent__), 3),
-      n_treedepth   = sum(d$treedepth__ >= max_treedepth),
-      min_ebfmi     = round(safe_min(vapply(by_chain, ebfmi1, numeric(1))), 3),
-      stringsAsFactors = FALSE
-    )
-  })) else NULL
-  
-  out <- if (is.null(diag)) conv else merge(conv, diag, by = "id", all = TRUE)
-  
-  if ("scenarios_manifest" %in% stored) {
-    man <- targets::tar_read(scenarios_manifest)
-    out <- merge(man, out, by = "id", all.x = TRUE)
   }
+  if (!length(rows)) stop("No FTS bundles found in ", fts_dir, call. = FALSE)
+  out <- merge(grid, dplyr::bind_rows(rows), by = "id", all.y = TRUE)
   
   meta <- targets::tar_meta(fields = "seconds")
-  mcmc <- meta[grepl("^fit_mcmc_", meta$name), c("name", "seconds")]
-  if (nrow(mcmc)) {
-    mcmc$id <- id_of(mcmc$name)
-    out <- merge(
-      out,
-      data.frame(id = mcmc$id,
-                 fit_seconds = round(mcmc$seconds, 1),
-                 fit_minutes = round(mcmc$seconds / 60, 2)),
-      by = "id", all.x = TRUE
-    )
-  }
+  out$fit_seconds <- round(meta$seconds[match(out$target, meta$name)], 1)
+  out$fit_minutes <- round(out$fit_seconds / 60, 2)
   
-  out$ok <- with(out,
-                 !is.na(max_rhat) &
-                   round(max_rhat, digits=2)     <= thresholds$rhat &
-                   min_ess_bulk >= thresholds$ess  &
-                   min_ess_tail >= thresholds$ess  &
-                   (is.null(diag) | (pct_divergent <= 5 & min_ebfmi >= thresholds$ebfmi)))
+  out$ok <- !is.na(out$max_rhat) &
+    round(out$max_rhat, digits = 2) <= thresholds$rhat &
+    out$min_ess_bulk >= thresholds$ess &
+    out$min_ess_tail >= thresholds$ess &
+    (is.na(out$pct_divergent) | out$pct_divergent <= 5) &
+    (is.na(out$min_ebfmi)     | out$min_ebfmi >= thresholds$ebfmi)
   out$ok[is.na(out$ok)] <- FALSE
-  out$status <- ifelse(is.na(out$max_rhat), "missing/errored",
-                       ifelse(out$ok, "ok", "check"))
+  out$status <- ifelse(is.na(out$max_rhat), "missing/errored", ifelse(out$ok, "ok", "check"))
   
   out <- out[stringr::str_order(out$id, numeric = TRUE), , drop = FALSE]
-  message(sprintf("%d/%d scenarios pass all checks (rhat<=%.3f, ess>=%d, divergent=0, ebfmi>=%.2f).",
-                  sum(out$ok), nrow(out),
-                  thresholds$rhat, thresholds$ess, thresholds$ebfmi))
-  tibble::as_tibble(out)
+  message(sprintf("%d/%d scenarios pass all checks (rhat<=%.3f, ess>=%d, divergent<=5%%, ebfmi>=%.2f).",
+                  sum(out$ok), nrow(out), thresholds$rhat, thresholds$ess, thresholds$ebfmi))
+  tibble::as_tibble(out[, setdiff(names(out), "target")])
 }
-
-
 
 #### export ####
 write_fit_bundle <- function(draws, summary, diagnostics, path) {
